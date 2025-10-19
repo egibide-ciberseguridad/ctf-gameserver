@@ -8,59 +8,57 @@ jobs:
   lint:
     name: Lint soure code
     runs-on: ubuntu-latest
-    container: python:3.11-bookworm
+    container: python:3.13-trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: pip install -e .[dev]
       - run: make lint
 
-  # Test with Tox, a recent Python version and libraries from PyPI
-  test_tox:
-    name: Test with Tox
+  # Test with a recent Python version and libraries from PyPI
+  test_pypi:
+    name: Test with PyPI dependencies
     runs-on: ubuntu-latest
-    container: python:3.11-bookworm
+    container: python:3.13-trixie
     permissions:
       # Required for "EnricoMi/publish-unit-test-result-action"
       checks: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup dependencies
         run: |
-          pip install tox
-          # Make sure we have our dependencies, which are not required for Tox but for `make build`
-          pip install -e .
+          pip install -e .[dev]
           # Ping is required for VPNStatusTest
           apt-get --yes update
           apt-get --yes install iputils-ping
       - run: make build
-      - run: tox -e py311 -- --junitxml=.tox/py311/log/results.xml
+      - run: pytest --junitxml=pytest-results.xml --cov=src --cov-report=term --cov-report=html tests
       - name: Publish unit test results
         uses: EnricoMi/publish-unit-test-result-action@v2
         if: always()
         with:
-          files: .tox/py*/log/results.xml
+          files: pytest-results.xml
           comment_mode: "off"
       - name: Archive unit test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tox-test-results
-          path: .tox/py*/log/results.xml
+          name: pypi-test-results
+          path: pytest-results.xml
           if-no-files-found: error
       - name: Archive code coverage results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tox-code-coverage-report
-          path: .tox/py*/log/htmlcov
+          name: pypi-test-coverage-report
+          path: htmlcov
           if-no-files-found: error
 
   build_deb_package:
     name: Build Debian package
     runs-on: ubuntu-latest
-    container: debian:bookworm
+    container: debian:trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: apt-get --yes update
       - run: apt-get --yes install --no-install-recommends devscripts dpkg-dev equivs
       # Add `--yes` to mk-build-deps' default options for apt-get
@@ -78,11 +76,11 @@ jobs:
   test_debian:
     name: Test with Debian
     runs-on: ubuntu-latest
-    container: debian:bookworm
+    container: debian:trixie
     needs: build_deb_package
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
         with:
           name: deb-package
       - run: apt-get --yes update
@@ -90,13 +88,13 @@ jobs:
       - run: apt-get --yes install --no-install-recommends ./ctf-gameserver_*.deb
       - run: apt-get --yes install make curl unzip python3-pytest python3-pytest-cov
       - run: make build
-      - run: pytest-3 --junitxml=results.xml --cov=src --cov-report=term --cov-report=html tests
+      - run: pytest-3 --junitxml=pytest-results.xml --cov=src --cov-report=term --cov-report=html tests
       - name: Archive unit test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: debian-test-results
-          path: results.xml
+          path: pytest-results.xml
           if-no-files-found: error
       - name: Archive code coverage results
         uses: actions/upload-artifact@v4
@@ -105,3 +103,41 @@ jobs:
           name: debian-code-coverage-report
           path: htmlcov
           if-no-files-found: error
+
+  build_docs:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    container: python:3.13-trixie
+    steps:
+      - uses: actions/checkout@v5
+      - run: pip install mkdocs
+      - run: mkdocs build --strict
+      - name: Store docs build
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs_site
+          path: docs_site
+          if-no-files-found: error
+
+  deploy_docs:
+    name: Deploy docs to ctf-gameserver.org
+    runs-on: ubuntu-latest
+    environment: ctf-gameserver.org
+    if: github.ref == 'refs/heads/master'
+    needs:
+      - lint
+      - test_pypi
+      - test_debian
+      - build_docs
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: docs_site
+          path: docs_site
+      - run: sudo apt-get --yes update
+      - run: sudo apt-get --yes install --no-install-recommends openssh-client rsync
+      - run: mkdir ~/.ssh
+      - run: echo "${{ vars.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+      - run: echo "${{ secrets.SSH_KEY_PRIVATE }}" > ~/.ssh/id_ed25519
+      - run: chmod 600 ~/.ssh/id_ed25519
+      - run: rsync -a --delete --delete-delay --delay-updates docs_site/ gameserver-docs-upload@www.faust.cs.fau.de:site/

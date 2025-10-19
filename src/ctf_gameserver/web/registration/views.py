@@ -8,17 +8,16 @@ from django.views.generic import ListView
 from django.shortcuts import get_object_or_404, render, redirect
 from django.conf import settings
 from django.utils.safestring import mark_safe
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.contrib import messages
 from django.contrib.auth import logout, get_user_model
 from django.contrib.auth.decorators import login_required
-from django.contrib.admin.views.decorators import staff_member_required
 
 from ctf_gameserver.web.scoring.decorators import before_competition_required, registration_open_required
 import ctf_gameserver.web.scoring.models as scoring_models
 from . import forms
 from .models import Team, TeamDownload
-from .util import email_token_generator
+from .util import EmailConfirmationTokenGenerator, send_confirmation_mail
 
 User = get_user_model()    # pylint: disable=invalid-name
 
@@ -41,7 +40,7 @@ def register(request):
         if user_form.is_valid() and team_form.is_valid():
             user = user_form.save()
             team_form.save(user)
-            user_form.send_confirmation_mail(request)
+            send_confirmation_mail(user, request)
 
             messages.success(request,
                              mark_safe(_('Successful registration! A confirmation mail has been sent to '
@@ -76,7 +75,7 @@ def edit_team(request):
             team_form.save(user)
 
             if 'email' in user_form.changed_data:
-                user_form.send_confirmation_mail(request)
+                send_confirmation_mail(user, request)
                 logout(request)
 
                 messages.warning(request, _('A confirmation mail has been sent to your new formal email '
@@ -165,6 +164,7 @@ def confirm_email(request):
         messages.error(request, error_message)
         return render(request, '400.html', status=400)
 
+    email_token_generator = EmailConfirmationTokenGenerator()
     if not email_token_generator.check_token(user, token):
         messages.error(request, error_message)
         return render(request, '400.html', status=400)
@@ -252,34 +252,3 @@ def get_team_download(request, filename):
         raise Http404('File not found')
 
     return FileResponse(fs_path.open('rb'), as_attachment=True)
-
-
-@staff_member_required
-def mail_teams(request):
-    """
-    View which allows the generation of 'mailto' links to write emails to the formal or informal addresses of
-    all teams.
-    Addresses are split into batches because most mail servers limit the number of recipients per single
-    message.
-    """
-
-    form = forms.MailTeamsForm(request.GET)
-
-    if not form.is_valid():
-        return render(request, '400.html', status=400)
-
-    if form.cleaned_data['addrs'] == 'formal':
-        addresses = [values['user__email'] for values in
-                     Team.active_objects.values('user__email').distinct()]
-    else:
-        addresses = [values['informal_email'] for values in
-                     Team.active_objects.values('informal_email').distinct()]
-
-    batch_size = form.cleaned_data['batch']
-    batches = []
-
-    for i in range(0, len(addresses), batch_size):
-        # Comma-separated recipients for 'mailto' are against the spec, but should work in practice
-        batches.append(','.join(addresses[i:i+batch_size]))
-
-    return render(request, 'mail_teams.html', {'form': form, 'batches': batches})

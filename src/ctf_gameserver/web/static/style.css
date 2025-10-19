@@ -2,6 +2,18 @@
  * Style sheet for some custom styles which cannot be achieved with Bootstrap.
  */
 
+/*
+ * Target all headings that have any element preceding them on the same level, this prevents unnecessary
+ * margins for the first heading
+ */
+* + h1, * + h2, * + h3, * + h5, * + h6 {
+    margin-top: 1.1em;
+}
+
+#user-menu[data-bs-popper] {
+    left: unset;
+    right: 0;
+}
 
 #page-content {
     margin-bottom: 60px;
@@ -11,17 +23,8 @@
     margin-bottom: 30px;
 }
 
-.bg-block {
-    padding: 15px;
-}
-
-.form-inline .form-group {
-    margin-right: 10px;
-}
-
-.form-inline .help-block {
-    /* Help texts don't really have much space in inline forms */
-    display: none;
+input.number-field {
+    width: 5em;
 }
 
 .clearable-input-image {
@@ -44,26 +47,19 @@ th.border-right, td.border-right {
     width: 80px;
 }
 
+.name-column {
+     min-width: 12em;
+     max-width: 15em;
+}
+
 .team-image {
     width: 50px;
     max-height: 50px;
     object-fit: contain;
 }
 
-.header-buttons {
-    margin-top: 20px;
-}
-
-#mail-teams-content {
-    margin-top: 40px;
-}
-
 img#load-spinner {
     width: 1.7em;
-}
-
-img#load-spinner, button#refresh {
-    margin-right: 20px;
 }
 
 #history-table td {
@@ -76,11 +72,10 @@ img#load-spinner, button#refresh {
     display: block;
 }
 
-#history-table td a:hover {
+#history-table td a {
     text-decoration: none;
 }
 
 #check-list {
-    margin-top: 20px;
     padding-left: 20px;
 }

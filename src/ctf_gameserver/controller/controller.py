@@ -201,15 +201,17 @@ def main_loop_step(db_conn, metrics, scoring_lock, nonstop):
     # Check if we really need to increase the tick because of the capping to 60 seconds from above
     if get_sleep_seconds(control_info, metrics, now) <= 0:
         logging.info('After tick %d, increasing tick to the next one', control_info['current_tick'])
+        is_first_increase = control_info['current_tick'] < 0
         database.increase_tick(db_conn)
-        calculate_scoreboard_in_thread(db_conn, metrics, scoring_lock)
+        if not is_first_increase:
+            calculate_scoreboard_in_thread(db_conn, metrics, scoring_lock)
 
 
 def calculate_scoreboard_in_thread(db_conn, metrics, lock):
 
     def calculate():
         if not lock.acquire(blocking=False):
-            logging.warning('Skipping scoreboard calculation because previous run is stil ongoing')
+            logging.warning('Skipping scoreboard calculation because previous run is still ongoing')
             return
 
         try:
@@ -221,6 +223,16 @@ def calculate_scoreboard_in_thread(db_conn, metrics, lock):
             lock.release()
 
     Thread(target=calculate, daemon=True).start()
+
+
+def wait_for_calculate_scoreboard_thread(lock):
+    """
+    Waits until scoreboard calculation thread has finished.
+
+    Only used in tests to prevent race conditions.
+    """
+
+    lock.acquire()
 
 
 def get_sleep_seconds(control_info, metrics, now=None):
