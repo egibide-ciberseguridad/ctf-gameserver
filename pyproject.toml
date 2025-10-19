@@ -11,7 +11,7 @@ authors = [
     {name = "Felix Dreissig", email = "f30@f30.me"},
     {name = "Simon Ruderich", email = "simon@ruderich.org"},
 ]
-license = "ISC"
+license = {text = "ISC"}
 readme = "README.md"
 requires-python = ">= 3.13"
 
