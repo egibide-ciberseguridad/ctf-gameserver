@@ -29,11 +29,11 @@ class MasterTest(DatabaseTestCase):
             'tick': 2
         }
 
-        params1 = {'tick': 2}
+        params1 = {'tick': 2, 'flagstore': 0}
         resp1 = self.master_loop.handle_flag_request(task_info, params1)
         flag_id1, team1 = verify(resp1, self.secret)
 
-        params2 = {'tick': 2}
+        params2 = {'tick': 2, 'flagstore': 0}
         resp2 = self.master_loop.handle_flag_request(task_info, params2)
         flag_id2, team2 = verify(resp2, self.secret)
         # "params3" and "resp3" don't exist anymore
@@ -44,10 +44,10 @@ class MasterTest(DatabaseTestCase):
         self.assertEqual(flag_id2, 2)
         self.assertEqual(team2, 92)
 
-        params4 = {'tick': 1}
+        params4 = {'tick': 1, 'flagstore': 0}
         resp4 = self.master_loop.handle_flag_request(task_info, params4)
         flag_id4, team4 = verify(resp4, self.secret)
-        params5 = {'tick': 1}
+        params5 = {'tick': 1, 'flagstore': 0}
         resp5 = self.master_loop.handle_flag_request(task_info, params5)
         flag_id5, team5 = verify(resp5, self.secret)
 
@@ -59,7 +59,8 @@ class MasterTest(DatabaseTestCase):
         self.assertEqual(team5, 92)
 
         params6 = {}
-        self.assertIsNone(self.master_loop.handle_flag_request(task_info, params6))
+        with self.assertRaises(KeyError):
+            self.master_loop.handle_flag_request(task_info, params6)
 
         # Changing the start time changes all flags
         with transaction_cursor(self.connection) as cursor:
@@ -69,6 +70,56 @@ class MasterTest(DatabaseTestCase):
         resp4_again = self.master_loop.handle_flag_request(task_info, params4)
         self.assertNotEqual(resp1, resp1_again)
         self.assertNotEqual(resp4, resp4_again)
+
+    def test_handle_flag_request_flagstores(self):
+        with transaction_cursor(self.connection) as cursor:
+            cursor.execute('UPDATE scoring_gamecontrol SET start=NOW()')
+            cursor.execute('INSERT INTO scoring_flag (id, task_id, flagid, flagstore)'
+                           '    VALUES (4, 1, NULL, 1)')
+
+        task_info = {
+            'service': 'service1',
+            '_team_id': 2,
+            'team': 92,
+            'tick': 1
+        }
+
+        params_store0 = {'tick': 1, 'flagstore': 0}
+        resp_store0 = self.master_loop.handle_flag_request(task_info, params_store0)
+        flag_id_store0, team_store0 = verify(resp_store0, self.secret)
+
+        params_store1 = {'tick': 1, 'flagstore': 1}
+        resp_store1 = self.master_loop.handle_flag_request(task_info, params_store1)
+        flag_id_store1, team_store1 = verify(resp_store1, self.secret)
+
+        self.assertNotEqual(resp_store0, resp_store1)
+        self.assertEqual(flag_id_store0, 1)
+        self.assertEqual(flag_id_store1, 4)
+        self.assertEqual(team_store0, 92)
+        self.assertEqual(team_store1, 92)
+
+    def test_handle_flagid_request(self):
+        with transaction_cursor(self.connection) as cursor:
+            cursor.execute('INSERT INTO scoring_flag (id, task_id, flagid, flagstore)'
+                           '    VALUES (4, 1, NULL, 1)')
+
+        task_info = {
+            'service': 'service1',
+            '_team_id': 2,
+            'team': 92,
+            'tick': 1
+        }
+
+        self.master_loop.handle_flagid_request(task_info, {'data': 'flagid-store1', 'flagstore': 1})
+
+        with transaction_cursor(self.connection) as cursor:
+            cursor.execute('SELECT flagid FROM scoring_flag WHERE id = 1')
+            flagid_store0 = cursor.fetchone()[0]
+            cursor.execute('SELECT flagid FROM scoring_flag WHERE id = 4')
+            flagid_store1 = cursor.fetchone()[0]
+
+        self.assertIsNone(flagid_store0)
+        self.assertEqual(flagid_store1, 'flagid-store1')
 
     def test_handle_result_request(self):
         task_info = {
@@ -83,11 +134,12 @@ class MasterTest(DatabaseTestCase):
         with transaction_cursor(self.connection) as cursor:
             cursor.execute('SELECT COUNT(*) FROM scoring_statuscheck')
             self.assertEqual(cursor.fetchone()[0], 1)
-            cursor.execute('SELECT status FROM scoring_statuscheck'
-                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 1')
+            cursor.execute('SELECT check_.status FROM scoring_statuscheck check_, scoring_checkertask task'
+                           '    WHERE check_.task_id = task.id AND task.service_id = 1'
+                           '        AND task.team_id = 2 AND task.tick = 1')
             self.assertEqual(cursor.fetchone()[0], CheckResult.OK.value)
-            cursor.execute('SELECT placement_end FROM scoring_flag'
-                           '    WHERE service_id = 1 AND protecting_team_id = 2 AND tick = 1')
+            cursor.execute('SELECT exec_end FROM scoring_checkertask'
+                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 1')
             self.assertGreaterEqual(cursor.fetchone()[0], start_time)
 
         task_info['tick'] = 2
@@ -95,32 +147,35 @@ class MasterTest(DatabaseTestCase):
         start_time = datetime.datetime.now(datetime.UTC).replace(microsecond=0, tzinfo=None)
         self.assertIsNone(self.master_loop.handle_result_request(task_info, param))
         with transaction_cursor(self.connection) as cursor:
-            cursor.execute('SELECT status FROM scoring_statuscheck'
-                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 2')
+            cursor.execute('SELECT check_.status FROM scoring_statuscheck check_, scoring_checkertask task'
+                           '    WHERE check_.task_id = task.id AND task.service_id = 1'
+                           '        AND task.team_id = 2 AND task.tick = 2')
             self.assertEqual(cursor.fetchone()[0], CheckResult.FAULTY.value)
-            cursor.execute('SELECT placement_end FROM scoring_flag'
-                           '    WHERE service_id = 1 AND protecting_team_id = 2 AND tick = 2')
+            cursor.execute('SELECT exec_end FROM scoring_checkertask'
+                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 2')
             self.assertGreaterEqual(cursor.fetchone()[0], start_time)
 
         task_info['tick'] = 3
         param = 'Not an int'
         self.assertIsNone(self.master_loop.handle_result_request(task_info, param))
         with transaction_cursor(self.connection) as cursor:
-            cursor.execute('SELECT status FROM scoring_statuscheck'
-                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 3')
+            cursor.execute('SELECT check_.status FROM scoring_statuscheck check_, scoring_checkertask task'
+                           '    WHERE check_.task_id = task.id AND task.service_id = 1'
+                           '        AND task.team_id = 2 AND task.tick = 3')
             self.assertIsNone(cursor.fetchone())
-            cursor.execute('SELECT placement_end FROM scoring_flag'
-                           '    WHERE service_id = 1 AND protecting_team_id = 2 AND tick = 3')
+            cursor.execute('SELECT exec_end FROM scoring_checkertask'
+                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 3')
             self.assertIsNone(cursor.fetchone()[0])
 
         param = 1337
         self.assertIsNone(self.master_loop.handle_result_request(task_info, param))
         with transaction_cursor(self.connection) as cursor:
-            cursor.execute('SELECT status FROM scoring_statuscheck'
-                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 3')
+            cursor.execute('SELECT check_.status FROM scoring_statuscheck check_, scoring_checkertask task'
+                           '    WHERE check_.task_id = task.id AND task.service_id = 1'
+                           '        AND task.team_id = 2 AND task.tick = 3')
             self.assertIsNone(cursor.fetchone())
-            cursor.execute('SELECT placement_end FROM scoring_flag'
-                           '    WHERE service_id = 1 AND protecting_team_id = 2 AND tick = 3')
+            cursor.execute('SELECT exec_end FROM scoring_checkertask'
+                           '    WHERE service_id = 1 AND team_id = 2 AND tick = 3')
             self.assertIsNone(cursor.fetchone()[0])
 
     @patch('ctf_gameserver.checker.database.get_check_duration')
@@ -147,7 +202,7 @@ class MasterTest(DatabaseTestCase):
                 cursor.execute('INSERT INTO registration_team (user_id, informal_email, image, affiliation,'
                                '                               country, nop_team)'
                                '    VALUES (%s, %s, %s, %s, %s, false)', (i, email, '', '', 'World'))
-                cursor.execute('INSERT INTO scoring_flag (service_id, protecting_team_id, tick)'
+                cursor.execute('INSERT INTO scoring_checkertask (service_id, team_id, tick)'
                                '    VALUES (1, %s, 1)', (i,))
         self.master_loop.update_launch_params(1)
         self.assertEqual(self.master_loop.tasks_per_launch, 49)
